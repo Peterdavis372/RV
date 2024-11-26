@@ -71,6 +71,64 @@ get_rv_prebuilts() {
 			rv_rel+="/tags/${ver}"
 			name_ver="$ver"
 		fi
+
+		local url file tag_name name
+		file=$(find "$dir" -name "${fprefix}-${name_ver#v}.${ext}" -type f 2>/dev/null)
+		if [ -z "$file" ]; then
+			local resp asset name
+			resp=$(gh_req "$rv_rel" -) || return 1
+			if [ "$ver" = "dev" ]; then resp=$(jq -r '.[0]' <<<"$resp"); fi
+			tag_name=$(jq -r '.tag_name' <<<"$resp")
+			asset=$(jq -e -r ".assets[] | select(.name | endswith(\"$ext\"))" <<<"$resp") || return 1
+			url=$(jq -r .url <<<"$asset")
+			name=$(jq -r .name <<<"$asset")
+			file="${dir}/${name}"
+			gh_dl "$file" "$url" >&2 || return 1
+			echo "$tag: $(cut -d/ -f1 <<<"$src")/${name}  " >>"${cl_dir}/changelog.md"
+		else
+			local for_err=$file
+			if [ "$ver" = "latest" ]; then
+				file=$(grep -v '/[^/]*dev[^/]*$' <<<"$file" | head -1)
+			else file=$(grep "/[^/]*${ver#v}[^/]*\$" <<<"$file" | head -1); fi
+			if [ -z "$file" ]; then abort "filter fail: '$for_err' with '$ver'"; fi
+			name=$(basename "$file")
+			tag_name=$(cut -d'-' -f3- <<<"$name")
+			tag_name=v${tag_name%.*}
+		fi
+		if [ "$tag" = "Patches" ]; then
+			if [ ! -f "$file" ]; then echo -e "[Changelog](https://github.com/${src}/releases/tag/${tag_name})\n" >>"${cl_dir}/changelog.md"; fi
+			if [ "$REMOVE_RV_INTEGRATIONS_CHECKS" = true ]; then
+				if ! (
+					mkdir -p "${file}-zip" || return 1
+					unzip -qo "${file}" -d "${file}-zip" || return 1
+					java -cp "${BIN_DIR}/paccer.jar:${BIN_DIR}/dexlib2.jar" com.jhc.Main "${file}-zip/extensions/shared.rve" "${file}-zip/extensions/shared-patched.rve" || return 1
+					mv -f "${file}-zip/extensions/shared-patched.rve" "${file}-zip/extensions/shared.rve" || return 1
+					rm "${file}" || return 1
+					cd "${file}-zip" || abort
+					zip -0rq "${CWD}/${file}" . || return 1
+				) >&2; then
+					echo >&2 "Patching revanced-integrations failed"
+				fi
+				rm -r "${file}-zip" || :
+			fi
+		fi
+		echo -n "$file "
+	done
+	echo
+}
+
+set_prebuilts() {
+	APKSIGNER="${BIN_DIR}/apksigner.jar"
+	if [ "$OS" = Android ]; then
+		local arch
+		if [ "$(uname -m)" = aarch64 ]; then arch=arm64; else arch=arm; fi
+		HTMLQ="${BIN_DIR}/htmlq/htmlq-${arch}"
+		AAPT2="${BIN_DIR}/aapt2/aapt2-${arch}"
+		TOML="${BIN_DIR}/toml/tq-${arch}"
+	else
+		HTMLQ="${BIN_DIR}/htmlq/htmlq-x86_64"
+		TOML="${BIN_DIR}/toml/tq-x86_64"
+	fi
 }
 
 config_update() {
@@ -503,57 +561,4 @@ build_rv() {
 			fi
 		fi
 		if [ "$build_mode" = apk ]; then
-			local apk_output="${BUILD_DIR}/${app_name_l}-${rv_brand_f}-v${version_f}-${arch_f}.apk"
-			mv -f "$patched_apk" "$apk_output"
-			pr "Built ${table} (non-root): '${apk_output}'"
-			continue
-		fi
-		local base_template
-		base_template=$(mktemp -d -p "$TEMP_DIR")
-		cp -a $MODULE_TEMPLATE_DIR/. "$base_template"
-		local upj="${table,,}-update.json"
-
-		module_config "$base_template" "$pkg_name" "$version" "$arch"
-		module_prop \
-			"${args[module_prop_name]}" \
-			"${app_name} ${args[rv_brand]}" \
-			"$version" \
-			"${app_name} ${args[rv_brand]} Magisk module" \
-			"https://raw.githubusercontent.com/${GITHUB_REPOSITORY-}/update/${upj}" \
-			"$base_template"
-
-		local module_output="${app_name_l}-${rv_brand_f}-magisk-v${version_f}-${arch_f}.zip"
-		pr "Packing module ${table}"
-		cp -f "$patched_apk" "${base_template}/base.apk"
-		if [ "${args[include_stock]}" = true ]; then cp -f "$stock_apk" "${base_template}/${pkg_name}.apk"; fi
-		pushd >/dev/null "$base_template" || abort "Module template dir not found"
-		zip -"$COMPRESSION_LEVEL" -FSqr "${CWD}/${BUILD_DIR}/${module_output}" .
-		popd >/dev/null || :
-		pr "Built ${table} (root): '${BUILD_DIR}/${module_output}'"
-	done
-}
-
-list_args() { tr -d '\t\r' <<<"$1" | tr -s ' ' | sed 's/" "/"\n"/g' | sed 's/\([^"]\)"\([^"]\)/\1'\''\2/g' | grep -v '^$' || :; }
-join_args() { list_args "$1" | sed "s/^/${2} /" | paste -sd " " - || :; }
-
-module_config() {
-	local ma=""
-	if [ "$4" = "arm64-v8a" ]; then
-		ma="arm64"
-	elif [ "$4" = "arm-v7a" ]; then
-		ma="arm"
-	fi
-	echo "PKG_NAME=$2
-PKG_VER=$3
-MODULE_ARCH=$ma" >"$1/config"
-}
-module_prop() {
-	echo "id=${1}
-name=${2}
-version=v${3} (${NEXT_VER_CODE})
-versionCode=${NEXT_VER_CODE}
-author=j-hc
-description=${4}" >"${6}/module.prop"
-
-	if [ "$ENABLE_MAGISK_UPDATE" = true ]; then echo "updateJson=${5}" >>"${6}/module.prop"; fi
-}
+			local ap
