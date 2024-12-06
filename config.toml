@@ -12,7 +12,7 @@ patches-version = "v2.232.0-dev.1"
 apkmirror-dlurl = "https://apkmirror.com/apk/google-inc/youtube/"
 patches-source = "anddea/revanced-patches"
 integrations-source = "anddea/revanced-integrations"
-rv-brand = "anddea ReVanced""
+rv-brand = "anddea ReVanced"
 uptodown-dlurl = "https://youtube.en.uptodown.com/android"
 # archive-dlurl = "https://archive.org/download/jhc-apks/apks/com.google.android.youtube"
 
